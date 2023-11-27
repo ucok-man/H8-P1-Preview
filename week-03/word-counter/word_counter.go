@@ -17,61 +17,61 @@ func run(fpath string) error {
 		return err
 	}
 
-	result := spawn(bytes.NewBuffer(content))
-	if err := result.err; err != nil {
+	result, err := spawn(bytes.NewBuffer(content))
+	if err != nil {
 		return err
 	}
 
-	for word, count := range result.data {
+	for word, count := range result {
 		fmt.Printf("%-20s : %d\n", word, count)
 	}
 
 	return nil
 }
 
-type Result struct {
-	mu   *sync.Mutex
-	data map[string]int
-	err  error
-}
-
-func spawn(content *bytes.Buffer) *Result {
+func spawn(content *bytes.Buffer) (map[string]int, error) {
 	var wg sync.WaitGroup
+	var mu = &sync.Mutex{}
 
+	result := make(map[string]int)
 	input := make(chan io.Reader, runtime.NumCPU())
-	result := &Result{
-		data: make(map[string]int),
-		mu:   &sync.Mutex{},
-	}
 
+	var err error
 	scanner := bufio.NewScanner(content)
-	for scanner.Scan() && result.err == nil {
+	
+	for scanner.Scan() && err == nil {
 		wg.Add(1)
 
 		go func(input <-chan io.Reader) {
 			defer wg.Done()
-			readAndInsert(input, result)
+
+			reader := <-input
+			errcw := countWord(reader, result, mu)
+			if errcw != nil {
+				err = errcw
+			}
 		}(input)
 
 		input <- strings.NewReader(scanner.Text())
 	}
 
 	wg.Wait()
-	return result
+	return result, err
 }
 
-func readAndInsert(input <-chan io.Reader, result *Result) {
-	scanner := bufio.NewScanner(<-input)
+func countWord(reader io.Reader, result map[string]int, mu *sync.Mutex) error {
+	scanner := bufio.NewScanner(reader)
 	scanner.Split(bufio.ScanWords)
 
 	for scanner.Scan() {
 		word := scanner.Text()
-		result.mu.Lock()
-		result.data[word]++
-		result.mu.Unlock()
+		mu.Lock()
+		result[word]++
+		mu.Unlock()
 	}
 
 	if err := scanner.Err(); err != nil {
-		result.err = err
+		return err
 	}
+	return nil
 }
